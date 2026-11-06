@@ -5,12 +5,18 @@ from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score
+)
 
 training_df = pd.read_csv("../multi_family_eui.csv")
 test_df = pd.read_csv("../multifamily_building_energy_consumption_testing_dataset.csv")
 
 energy_col = "Weather Normalized Site Energy Use (kBtu)"
-area_col = "Largest Property Use Type - Gross Floor Area (ft²)"
+area_col = "Largest Property Use Type - Gross Floor Area (ft^2)"
 
 # Calculate EUI
 for df in [training_df, test_df]:
@@ -39,7 +45,7 @@ target = "EUI"
 features = [
     "Year Built",
     "Occupancy",
-    "Largest Property Use Type - Gross Floor Area (ft²)",
+    "Largest Property Use Type - Gross Floor Area (ft^2)",
     "Multifamily Housing - Total Number of Residential Living Units",
     "Multifamily Housing - Number of Bedrooms",
     "Multifamily Housing - Percent That Can Be Heated",
