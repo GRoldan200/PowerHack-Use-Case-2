@@ -45,7 +45,6 @@ target = "EUI"
 features = [
     "Year Built",
     "Occupancy",
-    "Largest Property Use Type - Gross Floor Area (ft^2)",
     "Multifamily Housing - Total Number of Residential Living Units",
     "Multifamily Housing - Number of Bedrooms",
     "Multifamily Housing - Percent That Can Be Heated",

@@ -12,55 +12,22 @@ from sklearn.ensemble import (
     RandomForestRegressor,
     GradientBoostingRegressor
 )
+from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
     r2_score
 )
 
-training_df = pd.read_csv("../multi_family_eui.csv")
-test_df = pd.read_csv("../multifamily_building_energy_consumption_testing_dataset.csv")
-
-energy_col = "Weather Normalized Site Energy Use (kBtu)"
-area_col = "Largest Property Use Type - Gross Floor Area (ft^2)"
-
-# Calculate EUI
-for df in [training_df, test_df]:
-    df["EUI"] = df[energy_col] / df[area_col].replace(0, np.nan)
-
-# Remove invalid target values
-training_df = training_df.replace([np.inf, -np.inf], np.nan)
-test_df = test_df.replace([np.inf, -np.inf], np.nan)
-
-training_df = training_df.dropna(subset=["EUI"])
-test_df = test_df.dropna(subset=["EUI"])
-
-target = "EUI"
-
-features = [
-    "Year Built",
-    "Occupancy",
-    "Largest Property Use Type - Gross Floor Area (ft^2)",
-    "Multifamily Housing - Total Number of Residential Living Units",
-    "Multifamily Housing - Number of Bedrooms",
-    "Multifamily Housing - Percent That Can Be Heated",
-    "Multifamily Housing - Percent That Can Be Cooled",
-    "Multifamily Housing - Resident Population Type"
-]
-
-X_train = training_df[features]
-y_train = training_df[target]
-
-X_test = test_df[features]
-y_test = test_df[target]
-
-numeric_features = X_train.select_dtypes(
-    include=["number"]
-).columns
-
-categorical_features = X_train.select_dtypes(
-    include=["object", "category", "bool"]
-).columns
+from data_prep import (
+    features,
+    X_train,
+    y_train,
+    X_test,
+    y_test,
+    numeric_features,
+    categorical_features
+)
 
 numeric_pipeline = Pipeline([
     ("imputer", SimpleImputer(strategy="median")),
@@ -87,9 +54,9 @@ models = {
     "Ridge Regression": Ridge(alpha=1.0),
 
     "Random Forest": RandomForestRegressor(
-        n_estimators=200,
-        max_depth=None,
-        min_samples_split=2,
+        n_estimators=400,
+        max_features=1/3,     # features considered at each split
+        min_samples_leaf=5,   # stops trees memorising single buildings
         random_state=42,
         n_jobs=-1
     ),
@@ -200,6 +167,21 @@ plt.rcParams.update({
     "axes.axisbelow": True
 })
 
+def short_label(feature):
+    return (
+        feature
+        .replace("numeric__", "")
+        .replace("categorical__", "")
+        .replace("Multifamily Housing - ", "")
+        .replace("Resident Population Type_", "Population: ")
+        .replace("Number of Residential Living Units in a ", "Units in ")
+        .replace(" (Number per 1,000 sq ft)", " per 1,000 ft²")
+        .replace(" (10 or more Stories)", "")
+        .replace(" (5-9 Stories)", "")
+        .replace("Number of ", "")
+    )
+
+
 ranked_models = results_df.sort_values("RMSE")["Model"].tolist()
 BASELINE = "Baseline (median EUI)"
 scatter_models = [name for name in ranked_models if name != BASELINE]
@@ -263,14 +245,7 @@ fig.savefig("chart_model_accuracy.png", dpi=150)
 
 # 3. Linear regression p-values per feature
 p_chart = p_values_df[p_values_df["Feature"] != "Intercept"].copy()
-p_chart["Label"] = (
-    p_chart["Feature"]
-    .str.replace("numeric__", "", regex=False)
-    .str.replace("categorical__", "", regex=False)
-    .str.replace("Multifamily Housing - ", "", regex=False)
-    .str.replace("Largest Property Use Type - ", "", regex=False)
-    .str.replace("Resident Population Type_", "Population: ", regex=False)
-)
+p_chart["Label"] = p_chart["Feature"].map(short_label)
 p_chart["Significance"] = -np.log10(p_chart["p-value"])
 p_chart = p_chart.sort_values("Significance")
 
@@ -280,7 +255,7 @@ colors = [
     for value in p_chart["Significance"]
 ]
 
-fig, ax = plt.subplots(figsize=(11, 6))
+fig, ax = plt.subplots(figsize=(11, 0.4 * len(p_chart) + 1.5))
 ax.barh(p_chart["Label"], p_chart["Significance"], color=colors, height=0.6)
 ax.axvline(significance_line, linestyle="--", linewidth=1.5, color=SECONDARY_TEXT)
 ax.text(
@@ -306,31 +281,32 @@ fig.tight_layout()
 fig.savefig("chart_p_values.png", dpi=150)
 
 
-# 4. Random Forest feature importance
-forest_pipeline = fitted_pipelines["Random Forest"]
-importance_df = pd.DataFrame({
-    "Feature": forest_pipeline.named_steps["preprocessor"].get_feature_names_out(),
-    "Importance": forest_pipeline.named_steps["regressor"].feature_importances_
-})
-importance_df["Label"] = (
-    importance_df["Feature"]
-    .str.replace("numeric__", "", regex=False)
-    .str.replace("categorical__", "", regex=False)
-    .str.replace("Multifamily Housing - ", "", regex=False)
-    .str.replace("Largest Property Use Type - ", "", regex=False)
-    .str.replace("Resident Population Type_", "Population: ", regex=False)
+# 4. Permutation importance of the best model, measured on the test data:
+# how much worse it gets when each feature's values are shuffled
+best_model = scatter_models[0]
+permutation = permutation_importance(
+    fitted_pipelines[best_model], X_test, y_test,
+    scoring="neg_mean_absolute_error",
+    n_repeats=25, random_state=42, n_jobs=-1
 )
+importance_df = pd.DataFrame({
+    "Feature": features,
+    "Importance": permutation.importances_mean
+})
+importance_df["Label"] = importance_df["Feature"].map(short_label)
 importance_df = importance_df.sort_values("Importance")
 
 fig, ax = plt.subplots(figsize=(11, 6))
-ax.barh(importance_df["Label"], importance_df["Importance"], color=SERIES_COLOR, height=0.6)
+ax.barh(
+    importance_df["Label"], importance_df["Importance"].clip(lower=0),
+    color=SERIES_COLOR, height=0.6
+)
 for i, value in enumerate(importance_df["Importance"]):
-    ax.text(value + 0.005, i, f"{value:.1%}", va="center", color=TEXT_COLOR, fontsize=9)
-ax.set_xlabel("Share of the model's decisions")
-ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0%}"))
+    ax.text(max(value, 0) + 0.02, i, f"{value:.2f}", va="center", color=TEXT_COLOR, fontsize=9)
+ax.set_xlabel("Increase in MAE when the feature is shuffled (kBtu/ft²)")
 ax.grid(axis="y", visible=False)
 ax.set_xlim(0, importance_df["Importance"].max() * 1.15)
-ax.set_title("What the Random Forest relies on most", loc="left", fontsize=13)
+ax.set_title(f"What the {best_model} relies on most (test data)", loc="left", fontsize=13)
 fig.tight_layout()
 fig.savefig("chart_feature_importance.png", dpi=150)
 
